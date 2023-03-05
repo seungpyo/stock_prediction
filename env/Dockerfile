@@ -13,10 +13,9 @@ ARG DST_CRENDENTIALS_DIR=/home/${USERNAME}
 
 RUN apt-get -y update && \
 apt-get install -y net-tools zsh vim curl wget git sudo unzip && \
-adduser --disabled-password --gecos "" ${USERNAME} && \
+adduser --disabled-password --gecos "" ${USERNAME} --shell /usr/bin/zsh && \
 usermod -aG sudo ${USERNAME} && \
-echo "${USERNAME} ALL=(ALL) NOPASSWD:ALL" >> /etc/sudoers && \
-chsh -s /bin/zsh
+echo "${USERNAME} ALL=(ALL) NOPASSWD:ALL" >> /etc/sudoers
 
 USER ${USERNAME}
 WORKDIR /home/${USERNAME}
@@ -30,6 +29,9 @@ rm -rf ${GOOGLE_SDK_TAR} && \
 pip install google-cloud-bigquery pandas db-dtypes
 ENV PATH ${PATH}:/home/${USERNAME}/google-cloud-sdk/bin
 ENV GOOGLE_APPLICATION_CREDENTIALS /home/${USERNAME}/.config/gcloud/application_default_credentials.json
+
+COPY ./requirements.txt /home/${USERNAME}/requirements.txt
+RUN pip3 install -r /home/${USERNAME}/requirements.txt
 
 RUN yes | sh -c "$(curl -fsSL https://raw.github.com/ohmyzsh/ohmyzsh/master/tools/install.sh)"
 RUN mv ~/.zshrc ~/.zshrc_bkup
