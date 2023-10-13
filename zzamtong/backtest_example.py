@@ -25,5 +25,5 @@ bt = Backtest(GOOG, SmaCross,
               exclusive_orders=True)
 
 output = bt.run()
-# bt.plot()
+bt.plot()
 print(output)

@@ -37,20 +37,22 @@ def get_snp500(filename: str = "SP500.csv") -> pd.DataFrame:
     return df
 
 class RSITxn(Strategy):
-    rsi_lower = 20
-    rsi_upper = 80
+    rsi_lower = 40
+    rsi_upper = 60
     window_size = 30
     def init(self):
         close = self.data.Close.to_series()
         self.rsi = self.I(get_rsi_of_day, close, self.window_size)
 
     def next(self):
-        if self.rsi[-1] < self.rsi_lower:
-            # self.buy()
-            self.sell()
-        elif self.rsi[-1] > self.rsi_upper:
+        # if self.rsi[-1] < self.rsi_lower:
+        if self.rsi[-2] <= self.rsi_lower and self.rsi[-1] > self.rsi_lower:
             self.buy()
             # self.sell()
+        # elif self.rsi[-1] > self.rsi_upper:
+        elif self.rsi[-2] >= self.rsi_upper and  self.rsi[-1] < self.rsi_upper:
+            # self.buy()
+            self.sell()
 
 
 SNP500 = get_snp500()
@@ -62,6 +64,7 @@ bt = Backtest(
     # commission=.002,
     trade_on_close=True,
     exclusive_orders=True,
+    # exclusive_orders=False,
 )
 
 output = bt.run()
