@@ -45,6 +45,8 @@ class BaseEnvironment:
         for _ in range(num_episodes):
             self.experience_single_episode()
             self.train_on_single_episode()
+    def test(self) -> None:
+        self.experience_single_episode()
     def experience_single_episode(self) -> None:
         self.reset()
         while not self.done:
@@ -59,7 +61,7 @@ class BaseEnvironment:
     def train_on_single_episode(self) -> None:
         raise NotImplementedError
     @abstractmethod
-    def perform_action(self, action: BaseAction) -> Tuple[BaseState, Optional[BaseAction]]:
+    def perform_action(self, action: BaseAction) -> Tuple[Optional[BaseState], Optional[BaseAction]]:
         raise NotImplementedError
     @abstractmethod
     def evaluate_rewards(self) -> None:

@@ -66,11 +66,10 @@ class SPYMAEnvironment(BaseEnvironment):
         self.account = Account(self.account.initial_cash, self.get_last_price_of_tickers)
         super().reset()
     def get_last_price_of_tickers(self, tickers: List[str]) -> Dict[str, float]:
-        # return {ticker: self.df[ticker].iloc[self._current_idx] for ticker in tickers}
         return {ticker: self.df.iloc[-1]["Close"] for ticker in tickers}
     def train_on_single_episode(self) -> None:
         pass
-    def perform_action(self, action: StockTradeAction) -> Tuple[SPYMAState, Optional[StockTradeAction]]:
+    def perform_action(self, action: StockTradeAction) -> Tuple[Optional[SPYMAState], Optional[StockTradeAction]]:
         transaction_failed = False
         price = self.df['Close'].iloc[self._current_idx]
         if action == StockTradeAction.BUY:
@@ -104,7 +103,7 @@ class SPYMAEnvironment(BaseEnvironment):
             if i == len(self.snapshots) - 2:
                 break
             next_snapshot = self.snapshots[i + 1]
-            log_diff = np.log(next_snapshot.state.price) - np.log(snapshot.state.price)
+            log_diff = np.log(next_snapshot.state.price / snapshot.state.price)
             if snapshot.action == StockTradeAction.BUY:
                 reward = log_diff
             elif snapshot.action == StockTradeAction.SELL:
