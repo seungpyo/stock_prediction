@@ -11,7 +11,7 @@ from dataclasses import dataclass
 from enum import Enum
 from datetime import date
 
-from rl.order import Account
+from order import Account
 
 class StockTradeAction(Enum):
     BUY = 0
@@ -127,7 +127,7 @@ class StockTradeState(BaseState):
         if lookback_array.shape[1] < self.days_to_lookback:
             raise ValueError(f"lookback_array.shape[1] < self.days_to_lookback: {lookback_array.shape[1]} < {self.days_to_lookback}")
         lookback_array = lookback_array.reshape(-1)
-        arr = np.concatenate([lookback_array, np.array([self.account.cash / self.account.initial_cash])])
+        arr = np.concatenate([lookback_array, np.array([self.account.예수금 / self.account.initial_cash])])
         return lookback_array
 
 
