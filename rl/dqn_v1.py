@@ -33,7 +33,7 @@ class DQNV1State(BaseState):
         self.ma120: float = ma120
 
     def to_ndarray(self) -> np.ndarray:
-        return np.array([
+        arr = np.array([
             self.today_open,
             self.ma5,
             self.ma10,
@@ -41,6 +41,11 @@ class DQNV1State(BaseState):
             self.ma60,
             self.ma120,
         ])
+        nan_indices = np.argwhere(np.isnan(arr))
+        if len(nan_indices) > 0:
+            raise ValueError(f"NaN detected in {self}")
+        return arr
+
     
 class DQNV1Agent(BaseAgent):
     def __init__(
@@ -71,9 +76,12 @@ class DQNV1Agent(BaseAgent):
                     StockTradeAction.SELL,
                     StockTradeAction.HOLD,
                 ], 
-                p=[0.3, 0.3, 0.4],
+                # p=[0.3, 0.3, 0.4],
             )
-        input_vec = state.to_tensor().to(device=self.device).unsqueeze(0)
+        try:
+            input_vec = state.to_tensor().to(device=self.device).unsqueeze(0)
+        except ValueError as e:
+            return StockTradeAction.HOLD
         pred = self.model(input_vec)
         return StockTradeAction(pred.argmax().to(device="cpu").item())
     
@@ -84,7 +92,7 @@ class DQNTrainConfig(BaseTrainConfig):
     def __init__(
         self,
         num_episodes: int,
-        num_batches: int,
+        batches_per_episode: int,
         batch_size: int,
         gamma: float,
         device: torch.device,
@@ -92,7 +100,7 @@ class DQNTrainConfig(BaseTrainConfig):
         lr_scheduler_step_size: int,
         lr_scheduler_gamma: float,
     ) -> None:
-        super().__init__(num_episodes, num_batches, batch_size)
+        super().__init__(num_episodes, batches_per_episode, batch_size)
         self.gamma: float = gamma
         self.device: torch.device = device
         self.learning_rate: float = learning_rate
@@ -145,11 +153,12 @@ class DQNV1Environment(BaseEnvironment):
         return {ticker: self.df.iloc[-1]["Close"] for ticker in tickers}
     def train_on_single_episode(self, train_config: DQNTrainConfig, current_episode: int) -> None:
         agent: DQNV1Agent = self.agent
-        if float(current_episode) / train_config.num_train_episodes > 0.25:
-            print(f"Current episode(={current_episode}) is greater than 25% of total episodes(={train_config.num_train_episodes}). Trusting model from now.")
+        if float(current_episode) / train_config.num_train_episodes > 0.5:
             agent.trust_model_from_now()
+        if current_episode % 5 == 0:
+            agent.update_old_model()
         agent.model.train()
-        valid_snapshots = [snapshot for snapshot in self.snapshots if snapshot.reward is not None]
+        valid_snapshots = [snapshot for snapshot in self.snapshots if snapshot.reward is not None and not np.isnan(snapshot.state.ma120)]
         for batch_idx in range(train_config.num_batches):
             random_snapshot_batch: List[ExperienceSnapshot] = np.random.choice(valid_snapshots, train_config.batch_size, replace=False,)
             state_batch: torch.Tensor = torch.stack([snapshot.state.to_tensor() for snapshot in random_snapshot_batch]).to(device=train_config.device)
@@ -159,7 +168,7 @@ class DQNV1Environment(BaseEnvironment):
             pred_q_values: torch.Tensor = agent.model(state_batch)
             old_rewards: torch.Tensor = old_pred_q_values.gather(1, action_batch.unsqueeze(1)).squeeze(1)
             pred_rewards: torch.Tensor = pred_q_values.gather(1, action_batch.unsqueeze(1)).squeeze(1)
-            target_reward_batch: torch.FloatTensor = reward_batch * train_config.gamma * old_rewards
+            target_reward_batch: torch.FloatTensor = reward_batch + train_config.gamma * old_rewards
             loss = nn.functional.mse_loss(pred_rewards, target_reward_batch)
             agent.model.zero_grad()
             loss.backward()
@@ -202,6 +211,8 @@ class DQNV1Environment(BaseEnvironment):
             action = StockTradeAction.HOLD
         return next_state, action
     def evaluate_rewards(self) -> None:
+        last_position: Optional[StockTradeAction] = None
+        last_reward: Optional[float] = None
         for i, snapshot in enumerate(self.snapshots):
             if i == len(self.snapshots) - 2:
                 break
@@ -213,10 +224,21 @@ class DQNV1Environment(BaseEnvironment):
             log_diff = np.log(tomorrow_price / today_price)
             if snapshot.action == StockTradeAction.BUY:
                 reward = log_diff
+                last_position = StockTradeAction.BUY
+                last_reward = reward
             elif snapshot.action == StockTradeAction.SELL:
                 reward = -log_diff
+                last_position = StockTradeAction.SELL
+                last_reward = reward
+            elif snapshot.action == StockTradeAction.HOLD:
+                if last_position is None:
+                    reward = 0.0
+                elif last_position == StockTradeAction.BUY:
+                    last_reward += log_diff
+                elif last_position == StockTradeAction.SELL:
+                    last_reward -= log_diff
             else:
-                reward = 0.0
+                raise ValueError(f"Unknown action: {snapshot.action}")
             self.snapshots[i].reward = reward
     @property
     def done(self) -> bool:
@@ -255,22 +277,26 @@ class DQNV1Model(nn.Module):
         return x
 
 if __name__ == "__main__": 
-
     train_config: DQNTrainConfig = DQNTrainConfig(
-        num_episodes=20,
-        num_batches=100,
-        batch_size=64,
-        gamma=0.2,
+        num_episodes=30,
+        batches_per_episode=50,
+        batch_size=128,
+        gamma=0.5,
         device=torch.device("mps") if torch.backends.mps.is_available() else torch.device("cpu"),
         learning_rate=1e-3,
-        lr_scheduler_step_size=10,
-        lr_scheduler_gamma=0.9,
+        lr_scheduler_step_size=1250,
+        lr_scheduler_gamma=0.2,
     )
     agent_model = DQNV1Model(input_dim=6, output_dim=3)
-    agent_optimizer = torch.optim.Adam(agent_model.parameters(), lr=train_config.learning_rate)
+    agent_optimizer = torch.optim.AdamW(
+        params=agent_model.parameters(), 
+        lr=train_config.learning_rate,
+        weight_decay=1e-4,
+    )
     agent_lr_scheduler = torch.optim.lr_scheduler.StepLR(agent_optimizer, step_size=train_config.lr_scheduler_step_size, gamma=train_config.lr_scheduler_gamma)
     agent = DQNV1Agent(agent_model, agent_optimizer, agent_lr_scheduler, train_config.device)
 
+    ticker = "SPY"
     train_environment = DQNV1Environment(
         agent=agent,
         ticker="SPY",
