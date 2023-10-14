@@ -2,6 +2,7 @@ from abc import abstractmethod, ABC
 from dataclasses import dataclass
 from enum import Enum
 from typing import *
+from tqdm import tqdm
 
 import numpy as np
 import torch
@@ -16,7 +17,7 @@ class BaseState(ABC):
     def to_ndarray(self) -> np.ndarray:
         raise NotImplementedError
     def to_tensor(self) -> torch.Tensor:
-        return torch.from_numpy(self.to_ndarray())
+        return torch.from_numpy(self.to_ndarray()).to(dtype=torch.float32)
 
 class BaseAgent(ABC):
     @abstractmethod
@@ -29,6 +30,12 @@ class ExperienceSnapshot:
         self.action: BaseAction = action
         self.reward: Optional[float] = reward
     
+@dataclass
+class BaseTrainConfig:
+    num_train_episodes: int
+    num_batches: int
+    batch_size: int
+
 class BaseEnvironment:
     def __init__(self, agent: BaseAgent, initial_state: BaseState) -> None:
         self.agent: BaseAgent = agent
@@ -41,10 +48,12 @@ class BaseEnvironment:
     def reset(self) -> None:
         self._current_state = self.initial_state
         self.snapshots = []
-    def train(self, num_episodes: int) -> None:
-        for _ in range(num_episodes):
+    def train(self, train_config: BaseTrainConfig) -> None:
+        print("Training with config:")
+        print(train_config)
+        for current_episode in tqdm(range(train_config.num_train_episodes)):
             self.experience_single_episode()
-            self.train_on_single_episode()
+            self.train_on_single_episode(train_config=train_config, current_episode=current_episode)
     def test(self) -> None:
         self.experience_single_episode()
     def experience_single_episode(self) -> None:
@@ -58,7 +67,7 @@ class BaseEnvironment:
             self._current_state = next_state
         self.evaluate_rewards()
     @abstractmethod
-    def train_on_single_episode(self) -> None:
+    def train_on_single_episode(self, train_config: BaseTrainConfig, current_episode: int) -> None:
         raise NotImplementedError
     @abstractmethod
     def perform_action(self, action: BaseAction) -> Tuple[Optional[BaseState], Optional[BaseAction]]:
@@ -73,10 +82,10 @@ class BaseEnvironment:
 
 def train_and_test_stock_trading_agent(
         train_environment: BaseEnvironment,
-        num_train_episodes: int,
+        train_config: BaseTrainConfig,
         test_environment: BaseEnvironment,
     ) -> None:
-    train_environment.train(num_train_episodes)
+    train_environment.train(train_config)
     test_environment.agent = train_environment.agent
     test_environment.experience_single_episode()
 
