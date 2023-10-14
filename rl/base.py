@@ -77,10 +77,13 @@ def train_and_test_stock_trading_agent(
     train_environment.train(num_train_episodes)
     test_environment.agent = train_environment.agent
     test_environment.experience_single_episode()
-    print("Test CAGR(%):", test_environment.account.cagr * 100)
-    print("Test profit(%):", test_environment.account.profit * 100)
-    print("Test number of trades:", test_environment.account.num_trades)
-    print("Test elapsed days:", test_environment.account.elapsed_days)
-    print("Test net worth:", test_environment.account.net_worth)
-    print("Test final balance:", test_environment.account.balance)
+
+    print(f"Initial cash: {train_environment.account.initial_cash}")
+    print(f"예수금: {test_environment.account.예수금}")
+    print(f"보유주식 평가액: {test_environment.account.보유주식_평가액}")
+    print(f"총자산: {test_environment.account.총자산}")
+    print(f"수익률 (%): {test_environment.account.수익 / train_environment.account.initial_cash * 100}%")
+    print(f"실현 수익률 (%): {test_environment.account.실현수익 / train_environment.account.initial_cash * 100}%")
+    print(f"CAGR (%): {test_environment.account.cagr * 100}%")
+    print(f"num_trades: {test_environment.account.num_trades}")
 

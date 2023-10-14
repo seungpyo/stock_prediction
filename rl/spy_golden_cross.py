@@ -29,9 +29,9 @@ class SPYMAAgent(BaseAgent):
         is_golden_cross = state.ma10_prev < state.ma20_prev and state.ma10 > state.ma20
         is_death_cross = state.ma10_prev > state.ma20_prev and state.ma10 < state.ma20
         if is_golden_cross:
-            return StockTradeAction.SELL
-        elif is_death_cross:
             return StockTradeAction.BUY
+        elif is_death_cross:
+            return StockTradeAction.SELL
         else:
             return StockTradeAction.HOLD
 
@@ -52,7 +52,7 @@ class SPYMAEnvironment(BaseEnvironment):
         )
         self.df.reset_index(inplace=True)
         self._current_idx = 1 # We also need to look at the previous day's MA
-        self.account = Account(initial_cash)
+        self.account = Account(initial_cash, self.get_last_price_of_tickers)
         initial_state = SPYMAState(
             price=self.df['Close'].iloc[self._current_idx],
             ma10=self.df['Close'].rolling(10).mean().iloc[self._current_idx],
@@ -63,10 +63,11 @@ class SPYMAEnvironment(BaseEnvironment):
         super().__init__(agent, initial_state)
     def reset(self) -> None:
         self._current_idx = 0
-        self.account = Account(self.account.initial_cash)
+        self.account = Account(self.account.initial_cash, self.get_last_price_of_tickers)
         super().reset()
     def get_last_price_of_tickers(self, tickers: List[str]) -> Dict[str, float]:
-        return {ticker: self.df[ticker].iloc[self._current_idx] for ticker in tickers}
+        # return {ticker: self.df[ticker].iloc[self._current_idx] for ticker in tickers}
+        return {ticker: self.df.iloc[-1]["Close"] for ticker in tickers}
     def train_on_single_episode(self) -> None:
         pass
     def perform_action(self, action: StockTradeAction) -> Tuple[SPYMAState, Optional[StockTradeAction]]:

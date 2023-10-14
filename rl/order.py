@@ -51,14 +51,15 @@ class Account:
                 shares[order.ticker] = 0
             shares[order.ticker] += order.volume
         return shares
+    @property
     def 보유주식_평가액(self) -> float:
         # return sum(order.volume * order.price for order in self.orders if order.is_long)
-        holding_tickers = [ticker for ticker, shares in self.종목별_보유주식수 if shares > 0]
+        holding_tickers = [ticker for ticker, shares in self.종목별_보유주식수.items() if shares > 0]
         last_prices = self.last_price_fn(holding_tickers)
-        return sum(shares * last_prices[ticker] for ticker, shares in self.종목별_보유주식수 if shares > 0)
+        return sum(shares * last_prices[ticker] for ticker, shares in self.종목별_보유주식수.items() if shares > 0)
     @property
     def 예수금(self) -> float:
-        return self.initial_cash - sum(order.price * order.value for order in self.orders)
+        return self.initial_cash - sum(order.price * order.volume for order in self.orders)
     @property
     def 총자산(self) -> float:
         return self.예수금 + self.보유주식_평가액
