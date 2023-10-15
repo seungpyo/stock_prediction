@@ -12,6 +12,11 @@ from order import Account
 class BaseAction(Enum):
     pass
 
+class StockTradeAction(BaseAction):
+    BUY = 0
+    SELL = 1
+    HOLD = 2
+
 class BaseState(ABC):
     @abstractmethod
     def to_ndarray(self) -> np.ndarray:
@@ -32,8 +37,8 @@ class ExperienceSnapshot:
     
 @dataclass
 class BaseTrainConfig:
-    num_train_episodes: int
-    num_batches: int
+    train_episodes: int
+    batches_per_episode: int
     batch_size: int
 
 class BaseEnvironment:
@@ -51,7 +56,7 @@ class BaseEnvironment:
     def train(self, train_config: BaseTrainConfig) -> None:
         print("Training with config:")
         print(train_config)
-        for current_episode in tqdm(range(train_config.num_train_episodes)):
+        for current_episode in tqdm(range(train_config.train_episodes)):
             self.experience_single_episode()
             self.train_on_single_episode(train_config=train_config, current_episode=current_episode)
     def test(self) -> None:

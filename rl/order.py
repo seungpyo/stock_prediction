@@ -72,11 +72,5 @@ class Account:
     @property
     def num_trades(self) -> int:
         return len(self.orders)
-    @property
-    def elapsed_days(self) -> int:
-        return (self.orders[-1].date - self.orders[0].date).days
-    @property
-    def cagr(self) -> float:
-        return (self.총자산 / self.initial_cash) ** (365 / self.elapsed_days) - 1
 
 
