@@ -1,3 +1,4 @@
+import os
 from datetime import date, datetime
 from copy import deepcopy
 import numpy as np
@@ -128,7 +129,7 @@ class DQNV1Environment(BaseEnvironment):
         initial_state = self.get_current_state()
         self.train_log: List[Dict[str, float]] = []
         self.train_record: TrainRecord = TrainRecord(
-            log_path=f"{datetime.now().strftime('%Y%m%d-%H%M%S')}.json",
+            log_path=os.path.join("logs", f"{datetime.now().strftime('%Y%m%d-%H%M%S')}.json",),
             metadata={
                 **asdict(train_config),
                 "ticker": ticker,
