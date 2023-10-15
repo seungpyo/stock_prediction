@@ -3,11 +3,13 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import *
 from tqdm import tqdm
+from time import time
 
 import numpy as np
 import torch
 
 from order import Account
+
 
 class BaseAction(Enum):
     pass
@@ -56,21 +58,47 @@ class BaseEnvironment:
     def train(self, train_config: BaseTrainConfig) -> None:
         print("Training with config:")
         print(train_config)
+        experience_times = []
+        training_times = []
         for current_episode in tqdm(range(train_config.train_episodes)):
+            t0 = time()
             self.experience_single_episode()
+            t1 = time()
             self.train_on_single_episode(train_config=train_config, current_episode=current_episode)
+            t2 = time()
+            experience_times.append(t1 - t0)
+            training_times.append(t2 - t1)
+        print(f"Average experience time: {np.mean(experience_times)}")
+        print(f"Average training time: {np.mean(training_times)}")
+
     def test(self) -> None:
         self.experience_single_episode()
     def experience_single_episode(self) -> None:
         self.reset()
+        select_action_times = []
+        perform_action_times = []
+        loop_etc_times = []
         while not self.done:
+            t0 = time()   
             action = self.agent.select_action(self._current_state)
+            t1 = time()
             next_state, alternative_action = self.perform_action(action)
+            t2 = time()
             if alternative_action is not None:
                 action = alternative_action
             self.snapshots.append(ExperienceSnapshot(self._current_state, action))
             self._current_state = next_state
+            t3 = time()
+            select_action_times.append(t1 - t0)
+            perform_action_times.append(t2 - t1)
+            loop_etc_times.append(t3 - t2)
+        t4 = time()
         self.evaluate_rewards()
+        t5 = time()
+        print(f"\tAverage select_action time: {np.mean(select_action_times)}")
+        print(f"\tAverage perform_action time: {np.mean(perform_action_times)}")
+        print(f"\tAverage loop_etc time: {np.mean(loop_etc_times)}")
+        print(f"\tevaluate_rewards time: {t5 - t4}")
     @abstractmethod
     def train_on_single_episode(self, train_config: BaseTrainConfig, current_episode: int) -> None:
         raise NotImplementedError

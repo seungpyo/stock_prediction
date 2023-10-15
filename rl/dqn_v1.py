@@ -13,6 +13,7 @@ class DQNV1State(BaseState):
     def __init__(
         self, 
         date: date,
+        today_close: float,
         today_open: float, 
         ma5: float, 
         ma10: float, 
@@ -21,6 +22,7 @@ class DQNV1State(BaseState):
         ma120: float,
     ) -> None:
         self.date: date = date
+        self.today_close: float = today_close
         self.today_open: float = today_open
         self.ma5: float = ma5
         self.ma10: float = ma10
@@ -28,6 +30,7 @@ class DQNV1State(BaseState):
         self.ma60: float = ma60
         self.ma120: float = ma120
 
+    # We exclude today_close, because it is not available at the time of trading.
     def to_ndarray(self) -> np.ndarray:
         arr = np.array([
             self.today_open,
@@ -142,13 +145,14 @@ class DQNV1Environment(BaseEnvironment):
     def get_current_state(self) -> DQNV1State:
         try:
             return DQNV1State(
-                date=self.df['Date'].iloc[self._current_idx],
-                today_open=self.df['Open'].iloc[self._current_idx],
-                ma5=self.df['Close'].rolling(5).mean().iloc[self._current_idx],
-                ma10=self.df['Close'].rolling(10).mean().iloc[self._current_idx],
-                ma20=self.df['Close'].rolling(20).mean().iloc[self._current_idx],
-                ma60=self.df['Close'].rolling(60).mean().iloc[self._current_idx],
-                ma120=self.df['Close'].rolling(120).mean().iloc[self._current_idx],
+                date=self.df['Date'].iat[self._current_idx],
+                today_close=self.df['Close'].iat[self._current_idx],
+                today_open=self.df['Open'].iat[self._current_idx],
+                ma5=self.df['Close'].rolling(5).mean().iat[self._current_idx],
+                ma10=self.df['Close'].rolling(10).mean().iat[self._current_idx],
+                ma20=self.df['Close'].rolling(20).mean().iat[self._current_idx],
+                ma60=self.df['Close'].rolling(60).mean().iat[self._current_idx],
+                ma120=self.df['Close'].rolling(120).mean().iat[self._current_idx],
             )
         except IndexError as e:
             raise e
@@ -216,33 +220,29 @@ class DQNV1Environment(BaseEnvironment):
     def evaluate_rewards(self) -> None:
         last_position: Optional[StockTradeAction] = None
         last_reward: Optional[float] = None
-        for i, snapshot in enumerate(self.snapshots):
-            if i == len(self.snapshots) - 2:
-                break
-            next_snapshot = self.snapshots[i + 1]
-            today_state: DQNV1State = snapshot.state
-            tomrrow_state: DQNV1State = next_snapshot.state
-            today_price = self.df.loc[self.df["Date"] == today_state.date]["Close"].iloc[0]
-            tomorrow_price = self.df.loc[self.df["Date"] == tomrrow_state.date]["Close"].iloc[0]
-            log_diff = np.log(tomorrow_price / today_price)
-            if snapshot.action == StockTradeAction.BUY:
-                reward = log_diff
-                last_position = StockTradeAction.BUY
-                last_reward = reward
-            elif snapshot.action == StockTradeAction.SELL:
-                reward = -log_diff
-                last_position = StockTradeAction.SELL
-                last_reward = reward
-            elif snapshot.action == StockTradeAction.HOLD:
-                if last_position is None:
-                    reward = 0.0
-                elif last_position == StockTradeAction.BUY:
-                    last_reward += log_diff
-                elif last_position == StockTradeAction.SELL:
-                    last_reward -= log_diff
-            else:
-                raise ValueError(f"Unknown action: {snapshot.action}")
-            self.snapshots[i].reward = reward
+        log_diffs = np.log(np.diff(self.df["Close"]))
+        for idx, log_diff in enumerate(log_diffs):
+            action = self.snapshots[idx].action
+            match action:
+                case StockTradeAction.BUY:
+                    reward = log_diff
+                    last_position = StockTradeAction.BUY
+                    last_reward = reward
+                case StockTradeAction.SELL:
+                    reward = -log_diff
+                    last_position = StockTradeAction.SELL
+                    last_reward = reward
+                case StockTradeAction.HOLD:
+                    if last_position is None:
+                        reward = 0.0
+                    elif last_position == StockTradeAction.BUY:
+                        last_reward += log_diff
+                    elif last_position == StockTradeAction.SELL:
+                        last_reward -= log_diff
+                case _:
+                    raise ValueError(f"Unknown action: {action}")
+            self.snapshots[idx].reward = reward
+
     @property
     def done(self) -> bool:
         return self._current_idx == len(self.df)
