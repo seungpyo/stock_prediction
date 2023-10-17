@@ -1,0 +1,33 @@
+{
+    "trade_actions": [
+        "BUY",
+        "HOLD",
+        "SELL"
+    ],
+    "trade_logs": [
+        {
+            "date": "2020-01-01",
+            "ticker": "AAPL",
+            "action": 0,
+            "open_price": 100,
+            "close_price": 110,
+            "high_price": 120,
+            "low_price": 90,
+            "volume": 1000000,
+            "reward": 0.1,
+            "balance": 1000000
+        },
+        {
+            "date": "2020-01-02",
+            "ticker": "AAPL",
+            "action": 1,
+            "open_price": 120,
+            "close_price": 100,
+            "high_price": 150,
+            "low_price": 90,
+            "volume": 1000000,
+            "reward": -0.14,
+            "balance": 9999
+        }
+    ]
+}

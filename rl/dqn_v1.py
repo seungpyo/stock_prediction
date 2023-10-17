@@ -110,6 +110,43 @@ class DQNTrainConfig(BaseTrainConfig):
         self.trust_after_ratio: float = trust_after_ratio
 
 
+class SnapshotDataset(torch.utils.data.Dataset):
+    def __init__(self, snapshots: List[ExperienceSnapshot], device: torch.device) -> None:
+        self.state_tensor = torch.stack([snapshot.state.to_tensor() for snapshot in snapshots]) # (num_snapshots, 6)
+        self.action_tensor = torch.LongTensor([snapshot.action.value for snapshot in snapshots])
+        self.reward_tensor = torch.FloatTensor([snapshot.reward for snapshot in snapshots])
+
+        self.lazy_load = True 
+        if device != torch.device("cpu"):
+            try:
+                self.state_tensor = self.state_tensor.to(device)
+                self.action_tensor = self.action_tensor.to(device)
+                self.reward_tensor = self.reward_tensor.to(device)
+                self.lazy_load = False
+            except RuntimeError as e:
+                print("Cannot load to device, maybe due to OOM. Loading on the fly instead.")
+                self.state_tensor = self.state_tensor.cpu()
+                self.action_tensor = self.action_tensor.cpu()
+                self.reward_tensor = self.reward_tensor.cpu()
+                self.lazy_load = True
+        self._len = len(snapshots)
+        self.device = device
+    def __len__(self) -> int:
+        return self._len
+    def __getitem__(self, idx: int) -> ExperienceSnapshot:
+        return {
+            "state": self.state_tensor[idx].to(self.device),
+            "action": self.action_tensor[idx].to(self.device),
+            "reward": self.reward_tensor[idx].to(self.device),
+        }
+    @staticmethod
+    def coalesce_fn(batch: List[Dict[str, torch.Tensor]]) -> Dict[str, torch.Tensor]:
+        return {
+            "state": torch.stack([b["state"] for b in batch]), # (batch_size, 6)
+            "action": torch.stack([b["action"] for b in batch]), # (batch_size,)
+            "reward": torch.stack([b["reward"] for b in batch]), # (batch_size,)
+        }
+
 class DQNV1Environment(BaseEnvironment):
     def __init__(
         self, 
@@ -142,6 +179,9 @@ class DQNV1Environment(BaseEnvironment):
             }
         )
         super().__init__(agent, initial_state)
+    @property
+    def buy_and_hold_profit(self) -> float:
+        return self.df.iloc[-1]["Close"] / self.df.iloc[0]["Close"]
     def get_current_state(self) -> DQNV1State:
         try:
             return DQNV1State(
@@ -170,11 +210,24 @@ class DQNV1Environment(BaseEnvironment):
             agent.update_old_model()
         agent.model.train()
         valid_snapshots = [snapshot for snapshot in self.snapshots if snapshot.reward is not None and not np.isnan(snapshot.state.ma120)]
-        for batch_idx in range(train_config.batches_per_episode):
-            random_snapshot_batch: List[ExperienceSnapshot] = np.random.choice(valid_snapshots, train_config.batch_size, replace=False,)
-            state_batch: torch.Tensor = torch.stack([snapshot.state.to_tensor() for snapshot in random_snapshot_batch]).to(device=train_config.device)
-            action_batch: torch.LongTensor = torch.LongTensor([snapshot.action.value for snapshot in random_snapshot_batch]).to(device=train_config.device)
-            reward_batch: torch.FloatTensor = torch.FloatTensor([snapshot.reward for snapshot in random_snapshot_batch]).to(device=train_config.device)
+
+        snapshot_dataset = SnapshotDataset(valid_snapshots, train_config.device)
+        # I don't know why, but num_workers > 0 causes SEGFAULT when using MPS, and slow loading when using CPU.
+        num_workers = 0
+        snapshot_dataloader = torch.utils.data.DataLoader(
+            snapshot_dataset,
+            batch_size=train_config.batch_size,
+            shuffle=True,
+            num_workers=num_workers,
+            collate_fn=SnapshotDataset.coalesce_fn,
+            multiprocessing_context='fork' if num_workers > 0 and self.agent.device == torch.device("mps") else None,
+        )
+
+        for batch_idx, batch in enumerate(snapshot_dataloader):
+            state_batch: torch.Tensor = batch["state"] # (batch_size, 6)
+            action_batch: torch.Tensor = batch["action"] # (batch_size,)
+            reward_batch: torch.Tensor = batch["reward"] # (batch_size,)
+
             old_pred_q_values: torch.Tensor = agent.old_model(state_batch)
             pred_q_values: torch.Tensor = agent.model(state_batch)
             old_rewards: torch.Tensor = old_pred_q_values.gather(1, action_batch.unsqueeze(1)).squeeze(1)
@@ -220,7 +273,7 @@ class DQNV1Environment(BaseEnvironment):
     def evaluate_rewards(self) -> None:
         last_position: Optional[StockTradeAction] = None
         last_reward: Optional[float] = None
-        log_diffs = np.log(np.diff(self.df["Close"]))
+        log_diffs = np.diff(np.log(self.df["Close"]))
         for idx, log_diff in enumerate(log_diffs):
             action = self.snapshots[idx].action
             match action:
@@ -260,31 +313,93 @@ class DQNV1Model(nn.Module):
         x = self.fc3(x)
         return x
 
+
+def visualize(environment: DQNV1Environment, agent: DQNV1Agent, top_k: int) -> None:
+    environment.reset()
+    environment.experience_single_episode()
+    preds_per_day: List[Dict[str, Any]] = []
+    for i, snapshot in enumerate(environment.snapshots):
+        try:
+            x = snapshot.state.to_tensor()
+        except ValueError as e:
+            continue
+        pred = agent.model(x)
+        pred_action = StockTradeAction(pred.argmax().to(device="cpu").item())
+        pred_reward = pred.max().to(device="cpu").item()
+        preds_per_day.append({
+            "Date": snapshot.state.date,
+            "pred_action": pred_action,
+            "pred_reward": pred_reward,
+        })
+    daily_rewards_per_action: Dict[StockTradeAction, List[Tuple[date, float]]] = {
+        StockTradeAction.BUY: [],
+        StockTradeAction.SELL: [],
+        StockTradeAction.HOLD: [],
+    }
+    for pred in preds_per_day:
+        daily_rewards_per_action[pred["pred_action"]].append((pred["Date"], pred["pred_reward"]))
+    for action, daily_rewards in daily_rewards_per_action.items():
+        daily_rewards.sort(key=lambda x: x[1], reverse=True)
+        daily_rewards_per_action[action] = daily_rewards if len(daily_rewards) <= top_k else daily_rewards[:top_k]
+    for action_idx, action in enumerate((StockTradeAction.BUY, StockTradeAction.SELL, StockTradeAction.HOLD)):
+        if len(daily_rewards_per_action[action]) == 0:
+            print(f"No {action} action")
+            continue
+        for i, (date, reward) in enumerate(daily_rewards_per_action[action]):
+            plt.subplot(3, top_k, action_idx * top_k + i + 1)
+            plt.title(f"{date.strftime('%Y-%m-%d')}, {reward:.4f}")
+            date_i = environment.df[environment.df["Date"] == date].index[0]
+            plt.plot(
+                environment.df["Date"].iloc[date_i - 120:date_i + 1],
+                environment.df["Close"].iloc[date_i - 120:date_i + 1],
+            )
+            plt.plot(
+                environment.df["Date"].iloc[date_i - 120:date_i + 1],
+                environment.df["Close"].iloc[date_i - 120:date_i + 1].rolling(120).mean(),
+            )
+            plt.scatter(
+                date,
+                environment.df["Close"].iloc[date_i],
+                color="red" if action == StockTradeAction.BUY else "green" if action == StockTradeAction.SELL else "blue",
+                marker="o",
+            )
+    plt.show()
+    
+    
+
 if __name__ == "__main__": 
     train_config: DQNTrainConfig = DQNTrainConfig(
-        train_episodes=4,
-        batches_per_episode=6,
-        batch_size=8,
+        train_episodes=50,
+        batches_per_episode=20,
+        batch_size=64,
         gamma=0.5,
         device=torch.device("cpu"),
-        # device=torch.device("mps") if torch.backends.mps.is_available() else torch.device("cpu"),
+        #evice=torch.device("mps") if torch.backends.mps.is_available() else torch.device("cpu"),
         learning_rate=1e-2,
-        lr_scheduler_step_size=1250,
+        lr_scheduler_step_size=30000000000,
         lr_scheduler_gamma=0.25,
-        trust_after_ratio=0.5,
+        trust_after_ratio=2.0,
     )
+    print("Train config:")
+    print(train_config)
+    print("Using device:", train_config.device)
     agent_model = DQNV1Model(input_dim=6, output_dim=3)
     agent_optimizer = torch.optim.AdamW(
         params=agent_model.parameters(), 
         lr=train_config.learning_rate,
         weight_decay=1e-4,
     )
-    agent_lr_scheduler = torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(
+    agent_lr_scheduler = torch.optim.lr_scheduler.StepLR(
         optimizer=agent_optimizer,
-        T_0=train_config.batches_per_episode * train_config.train_episodes + 1,
-        T_mult=1,
-        eta_min=3e-4,
+        step_size=train_config.lr_scheduler_step_size,
+        gamma=train_config.lr_scheduler_gamma,
     )
+    # agent_lr_scheduler = torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(
+    #     optimizer=agent_optimizer,
+    #     T_0=train_config.batches_per_episode * train_config.train_episodes + 1,
+    #     T_mult=1,
+    #     eta_min=3e-4,
+    # )
     agent = DQNV1Agent(agent_model, agent_optimizer, agent_lr_scheduler, train_config.device)
 
     ticker = "SPY"
@@ -308,11 +423,14 @@ if __name__ == "__main__":
     )
 
     train_environment.train(train_config)
+
+    visualize(train_environment, train_environment.agent, top_k=3)
+
     test_environment.agent = train_environment.agent
     test_environment.experience_single_episode()
 
     def cagr_over(account: Account, start_date: date, end_date: date) -> float:
-        return (account.총자산 / account.initial_cash) ** (1 / (end_date - start_date).days) - 1
+        return (account.총자산 / account.initial_cash) ** (365 / (end_date - start_date).days) - 1
 
     print("============ Train result ============")
     print(f"Initial cash: {train_environment.account.initial_cash}")
@@ -322,6 +440,8 @@ if __name__ == "__main__":
     print(f"수익률 (%): {train_environment.account.수익 / train_environment.account.initial_cash * 100}%")
     print(f"실현 수익률 (%): {train_environment.account.실현수익 / train_environment.account.initial_cash * 100}%")
     print(f"CAGR (%): {cagr_over(train_environment.account, train_start_date, train_end_date)* 100}%")
+    print(f"Buy & hold 수익률 (%): {(train_environment.buy_and_hold_profit - 1) * 100}%")
+    print(f"Buy & hold CAGR (%): {(train_environment.buy_and_hold_profit ** (365 / (train_end_date - train_start_date).days) - 1)* 100}%")
     print(f"num_trades: {train_environment.account.num_trades}")
 
     print("============ Test result ============")
@@ -332,6 +452,8 @@ if __name__ == "__main__":
     print(f"수익률 (%): {test_environment.account.수익 / train_environment.account.initial_cash * 100}%")
     print(f"실현 수익률 (%): {test_environment.account.실현수익 / train_environment.account.initial_cash * 100}%")
     print(f"CAGR (%): {cagr_over(test_environment.account, test_start_date, test_end_date)* 100}%")
+    print(f"Buy & hold 수익률 (%): {(test_environment.buy_and_hold_profit - 1) * 100}%")
+    print(f"Buy & hold CAGR (%): {(test_environment.buy_and_hold_profit ** (365 / (test_end_date - test_start_date).days) - 1) * 100}%")
     print(f"num_trades: {test_environment.account.num_trades}")
 
     print(f"Train record is saved at {train_environment.train_record.log_path}")
